@@ -1,28 +1,46 @@
+# qaoa_mina_final.py
+# Archivo final QAOA (warm-start válido) para el reto TSP/VRP.
+# Ejecutar: python qaoa_mina_final.py
+# Requiere: pennylane, networkx, matplotlib, numpy
+
 import numpy as np
 import pennylane as qml
 import networkx as nx
 import matplotlib.pyplot as plt
+import itertools
 
-##Matriz de costos de ejemplo
+#Matriz de distancias
 w = np.array([
-    [0.0, 5.0, 8.0, 6.0], 
+    [0.0, 5.0, 8.0, 6.0],
     [5.0, 0.0, 3.0, 7.0],
     [8.0, 3.0, 0.0, 4.0],
     [6.0, 7.0, 4.0, 0.0]
-])
-A = 10.0
-B = 10.0
+], dtype=float)
+
+def fuel_loaded(dist_ij, slope_ij):
+    return 1.104 + 4.810 * slope_ij + 0.000024 * dist_ij
+
+def fuel_unloaded(dist_ij, slope_ij):
+    return 0.496 + 2.072 * slope_ij + 0.000014 * dist_ij
+
+#parámetros a usar
+A = 1200.0
+B = 1200.0
 C = 1.0
+alpha_dijkstra = 0.0
+p_layers = 3
+opt_steps = 200
+use_xy_mixer = True
+warm_start = True
 
 
 def idx(i, p, n=None):
-    
+    """Mapeo (i,p) -> índice de qubit"""
     if n is None:
         n = w.shape[0]
     positions = n - 1
-    return (p-1) * n + i
+    return (p - 1) * n + i
 
-## trato de copiar el comportamiento de dijkstra
 def compute_dijkstra_norm(w, depot=0):
     n = w.shape[0]
     G = nx.DiGraph()
@@ -30,7 +48,7 @@ def compute_dijkstra_norm(w, depot=0):
         for j in range(n):
             if i == j:
                 continue
-            cij = w[i,j]
+            cij = w[i, j]
             if np.isfinite(cij) and cij > 0:
                 G.add_edge(i, j, weight=float(cij))
     try:
@@ -46,9 +64,9 @@ def compute_dijkstra_norm(w, depot=0):
     dmin, dmax = np.min(dists), np.max(dists)
     if dmax - dmin < 1e-9:
         return np.zeros(n)
-    norm = (dists - dmin) / (dmax - dmin)
-    return norm
+    return (dists - dmin) / (dmax - dmin)
 
+#Hamiltoniano de Andrés
 def build_cost_hamiltonian(w, A=10.0, B=10.0, C=1.0, alpha_dijkstra=0.0):
     n = w.shape[0]
     positions = n - 1
@@ -68,23 +86,17 @@ def build_cost_hamiltonian(w, A=10.0, B=10.0, C=1.0, alpha_dijkstra=0.0):
     for i in range(n):
         for j in range(n):
             cij = w[i, j]
-            if abs(cij) < 1e-12:
+            if not np.isfinite(cij) or abs(cij) < 1e-12:
                 continue
             for p in range(1, positions):
-                q_ip = idx(i, p, n)
-                q_jp1 = idx(j, p + 1, n)
-                add_quad(q_ip, q_jp1, cij)
+                add_quad(idx(i, p), idx(j, p + 1), cij)
 
     for i in range(n):
-        q_i1 = idx(i, 1, n)
-        lin[q_i1] += w[0, i]
-
-    for i in range(n):
-        q_i_last = idx(i, positions, n)
-        lin[q_i_last] += w[i, 0]
+        lin[idx(i, 1)] += w[0, i]
+        lin[idx(i, positions)] += w[i, 0]
 
     for p in range(1, positions + 1):
-        qs = [idx(i, p, n) for i in range(n)]
+        qs = [idx(i, p) for i in range(n)]
         const += A * 1.0
         for q in qs:
             lin[q] += -A
@@ -92,8 +104,8 @@ def build_cost_hamiltonian(w, A=10.0, B=10.0, C=1.0, alpha_dijkstra=0.0):
             for b in range(a + 1, len(qs)):
                 add_quad(qs[a], qs[b], 2.0 * A)
 
-    for i in range(1, n): 
-        qs = [idx(i, p, n) for p in range(1, positions + 1)]
+    for i in range(1, n):
+        qs = [idx(i, p) for p in range(1, positions + 1)]
         const += B * 1.0
         for q in qs:
             lin[q] += -B
@@ -101,24 +113,22 @@ def build_cost_hamiltonian(w, A=10.0, B=10.0, C=1.0, alpha_dijkstra=0.0):
             for b in range(a + 1, len(qs)):
                 add_quad(qs[a], qs[b], 2.0 * B)
 
+    ##idea de dijkstra porque no lo suelto jeje
     if alpha_dijkstra is not None and alpha_dijkstra > 0.0:
-        d_norm = compute_dijkstra_norm(w, depot=0)  # normalizado 0..1
+        d_norm = compute_dijkstra_norm(w, depot=0)
         for i in range(n):
-            penalty_i = alpha_dijkstra * d_norm[i]
+            penalty_i = alpha_dijkstra * float(d_norm[i])
             for p in range(1, positions + 1):
-                q = idx(i, p, n)
-                lin[q] += penalty_i
+                lin[idx(i, p)] += penalty_i
 
     const_z = const
     lin_z = np.zeros(num_qubits)
     quad_z = {}
-
     for q, a in enumerate(lin):
         if abs(a) < 1e-12:
             continue
         const_z += 0.5 * a
         lin_z[q] += -0.5 * a
-
     for (q1, q2), b in quad.items():
         const_z += C * 0.25 * b
         lin_z[q1] += -C * 0.25 * b
@@ -142,175 +152,233 @@ def build_cost_hamiltonian(w, A=10.0, B=10.0, C=1.0, alpha_dijkstra=0.0):
             ops.append(qml.PauliZ(q1) @ qml.PauliZ(q2))
 
     H_cost = qml.Hamiltonian(coeffs, ops)
-    return H_cost
+    return H_cost, lin, quad, const
 
-##Mixer
 def build_xy_mixer(num_cities):
-    num_qubits = num_cities * (num_cities - 1)
+    n = num_cities
+    positions = n - 1
+    num_qubits = n * positions
     terms = []
     coeffs = []
-    clients = list(range(1, num_cities))  
-    positions = num_cities - 1
-    for pos in range(1, positions + 1):
-        block = [idx(c, pos, num_cities) for c in clients]
-        for i in range(len(block)):
-            for j in range(i + 1, len(block)):
-                q1 = block[i]
-                q2 = block[j]
+    for p in range(1, positions + 1):
+        block = [idx(i, p, n) for i in range(n)]
+        for a in range(len(block)):
+            for b in range(a + 1, len(block)):
+                q1 = block[a]
+                q2 = block[b]
                 terms.append(qml.PauliX(q1) @ qml.PauliX(q2))
                 coeffs.append(1.0)
                 terms.append(qml.PauliY(q1) @ qml.PauliY(q2))
                 coeffs.append(1.0)
-    H_mixer = qml.Hamiltonian(coeffs, terms)
-    return H_mixer
+    return qml.Hamiltonian(coeffs, terms)
+
+def build_x_mixer(num_cities):
+    num_qubits = num_cities * (num_cities - 1)
+    terms = []
+    coeffs = []
+    for q in range(num_qubits):
+        terms.append(qml.PauliX(q))
+        coeffs.append(1.0)
+    return qml.Hamiltonian(coeffs, terms)
+
+def decode_route(bitstring, num_cities):
+    n = num_cities
+    positions = n - 1
+    route = [0]
+    visited = set()
+    valid = True
+    reason = None
+    for p in range(1, positions + 1):
+        segment = bitstring[(p - 1) * n : p * n]
+        ones = [i for i, ch in enumerate(segment) if ch == "1"]
+        if len(ones) != 1:
+            valid = False
+            reason = f"posición {p} tiene {len(ones)} unos"
+            route.append(None)
+            continue
+        city = ones[0]
+        if city == 0:
+            valid = False
+            reason = f"posición {p} eligió depósito (0)"
+            route.append(None)
+            continue
+        if city in visited:
+            valid = False
+            reason = f"ciudad {city} repetida"
+        visited.add(city)
+        route.append(city)
+    if visited != set(range(1, n)):
+        valid = False
+        if reason is None:
+            missing = sorted(set(range(1, n)) - visited)
+            reason = f"faltan ciudades {missing}"
+    route.append(0)
+    return route, valid, reason
+
+def classical_cost_of_route(route, wmat):
+    if any(r is None for r in route):
+        return float('inf')
+    c = 0.0
+    for i in range(len(route) - 1):
+        c += wmat[route[i], route[i+1]]
+    return c
+
+def best_classical_route(wmat):
+    n = wmat.shape[0]
+    best_cost = None
+    best_route = None
+    for perm in itertools.permutations(range(1, n)):
+        route = [0] + list(perm) + [0]
+        c = classical_cost_of_route(route, wmat)
+        if best_cost is None or c < best_cost - 1e-9:
+            best_cost = c
+            best_route = route
+    return best_route, best_cost
+
+best_route_classic, best_cost_classic = best_classical_route(w)
+print("Mejor ruta clásica (para warm-start):", best_route_classic, "costo:", best_cost_classic)
+
+def route_to_bitstring(route, n):
+    positions = n - 1
+    bits = ['0'] * (n * positions)
+    for p in range(1, positions + 1):
+        city = route[p]
+        q = idx(city, p, n)
+        bits[q] = '1'
+    return ''.join(bits)
+
+bitstring_warm = route_to_bitstring(best_route_classic, w.shape[0])
+print("Bitstring warm-start (base):", bitstring_warm)
 
 if __name__ == "__main__":
-    num_cities = w.shape[0]
-    H_cost = build_cost_hamiltonian(w, A=A, B=B, C=C, alpha_dijkstra=2.0)
-    print("H_cost terms:", len(H_cost.coeffs))
-    H_mixer = build_xy_mixer(num_cities)
-    print("H_mixer terms:", len(H_mixer.coeffs))
-    print("H_cost coeffs (first 10):", H_cost.coeffs[:10])
-    print("H_mixer coeffs (first 10):", H_mixer.coeffs[:10])
+    np.set_printoptions(precision=6, suppress=True)
 
+    n = w.shape[0]
+    positions = n - 1
+    num_qubits = n * positions
 
+    H_cost, lin_poly, quad_poly, const_poly = build_cost_hamiltonian(
+        w, A=A, B=B, C=C, alpha_dijkstra=alpha_dijkstra
+    )
 
+    H_mixer = build_xy_mixer(n) if use_xy_mixer else build_x_mixer(n)
 
-##Pruebita    
-    print("\nEjecutando QAOA p=1...\n")
+    print("H_cost terms:", len(H_cost.ops))
+    print("H_mixer terms:", len(H_mixer.ops))
+    print("num_qubits:", num_qubits)
 
-    import pennylane as qml
-    from pennylane import numpy as pnp
-
-    num_qubits = (num_cities) * (num_cities - 1)
     dev = qml.device("default.qubit", wires=num_qubits)
 
     def qaoa_layer(gamma, beta):
-        qml.expval  
         qml.ApproxTimeEvolution(H_cost, gamma, 1)
         qml.ApproxTimeEvolution(H_mixer, beta, 1)
 
     @qml.qnode(dev)
-    def circuit(params):
-        for q in range(num_qubits):
-            qml.Hadamard(q)
-
-        gamma, beta = params
-        qaoa_layer(gamma, beta)
-
+    def circuit(params, warm=False):
+        if warm:
+            for q_idx, bit in enumerate(bitstring_warm):
+                if bit == '1':
+                    qml.PauliX(wires=q_idx)
+        else:
+            for q in range(num_qubits):
+                qml.Hadamard(q)
+        for layer in range(p_layers):
+            qaoa_layer(params[0][layer], params[1][layer])
         return qml.expval(H_cost)
 
-    opt = qml.AdamOptimizer(stepsize=0.04)
-    params = pnp.array([0.1, 0.1], requires_grad=True)
-
-    for it in range(40):
-        params = opt.step(circuit, params)
-        if it % 10 == 0:
-            print(f"Iter {it:3d} | Energy = {circuit(params):.4f}")
-
-    print("\nParámetros óptimos:", params)
-    
-
     @qml.qnode(dev)
-    def probs(params):
-        for q in range(num_qubits):
-            qml.Hadamard(q)
-        gamma, beta = params
-        qaoa_layer(gamma, beta)
-        return qml.probs(range(num_qubits))
+    def probs_qnode(params, warm=False):
+        if warm:
+            for q_idx, bit in enumerate(bitstring_warm):
+                if bit == '1':
+                    qml.PauliX(wires=q_idx)
+        else:
+            for q in range(num_qubits):
+                qml.Hadamard(q)
+        for layer in range(p_layers):
+            qaoa_layer(params[0][layer], params[1][layer])
+        return qml.probs(wires=range(num_qubits))
 
-    p = probs(params)
+    rng = np.random.default_rng(42)
+    init_params = rng.uniform(0, 2 * np.pi, (2, p_layers))
+    params = qml.numpy.array(init_params, requires_grad=True)
 
-    ## ---------- Gráfica limpia: Top 10 probabilidades ----------
-    top_k = 10
-    sorted_indices = np.argsort(p)[::-1][:top_k]
-    top_probs = p[sorted_indices]
+    opt = qml.AdamOptimizer(stepsize=0.05)
+
+    print(f"\nEjecutando QAOA p={p_layers} (warm_start={warm_start})...\n")
+    for it in range(opt_steps):
+        params = opt.step(lambda p: circuit(p, warm=warm_start), params)
+        if (it + 1) % 10 == 0 or it == 0:
+            energy = circuit(params, warm=warm_start)
+            print(f"Iter {it:4d} | Energy = {energy:.6f}")
+
+    print("\nParámetros óptimos:\n", params)
+
+    probs = np.array(probs_qnode(params, warm=warm_start))
+
+    top_k = 20
+    sorted_indices = np.argsort(probs)[::-1][:top_k]
+    print("\nTop-{} estados decodificados:".format(top_k))
+
+    candidate_solutions = []
+    for idx_i in sorted_indices:
+        bs = format(idx_i, f"0{num_qubits}b")
+        route, valid, reason = decode_route(bs, n)
+        prob = probs[idx_i]
+        E_class = classical_cost_of_route(route, w) if valid else classical_cost_of_route(route, w)
+        print(f"{bs} -> {route}  (p={prob:.6f})  valid={valid}  reason={reason}  E_class={E_class:.6f}")
+        candidate_solutions.append((bs, route, valid, prob, E_class, reason))
+
+    valids = [c for c in candidate_solutions if c[2]]
+    if valids:
+        best = min(valids, key=lambda x: x[4])
+        print("\nMejor solución válida encontrada entre top-K:")
+        print(f"{best[0]} -> {best[1]}   prob={best[3]:.6f}  E_class={best[4]:.6f}")
+        best_route = best[1]
+        best_valid = True
+    else:
+        print("\nNo se encontró solución válida entre top-K. Tomando la más probable (aunque inválida).")
+        best = candidate_solutions[0]
+        best_route = best[1]
+        best_valid = False
+
+    clean_route = [r for r in best_route if r is not None]
+    if best_valid and len(clean_route) >= 2:
+        G = nx.DiGraph()
+        nodes = list(range(n))
+        G.add_nodes_from(nodes)
+        for i in range(n):
+            for j in range(n):
+                if i != j:
+                    G.add_edge(i, j, weight=float(w[i, j]) if np.isfinite(w[i, j]) else 1e6)
+        path_edges = [(clean_route[i], clean_route[i + 1]) for i in range(len(clean_route) - 1)]
+        pos_layout = nx.spring_layout(G, seed=42)
+        plt.figure(figsize=(7, 6))
+        nx.draw_networkx_nodes(G, pos_layout, node_color='lightgray', node_size=700)
+        nx.draw_networkx_labels(G, pos_layout, font_size=12)
+        nx.draw_networkx_edges(G, pos_layout, edge_color='lightgray')
+        nx.draw_networkx_edges(G, pos_layout, edgelist=path_edges, edge_color='red', width=3)
+        plt.title("Ruta (decodificada) según QAOA (mejor válida)")
+        plt.axis('off')
+        plt.show()
+    else:
+        print("No se pudo generar una ruta graficable (no hay solución válida entre top-K).")
+
+    # Gráfica de probabilidades top-K
     top_labels = [format(i, f"0{num_qubits}b") for i in sorted_indices]
-
-    plt.figure(figsize=(10,5))
+    top_probs = probs[sorted_indices]
+    plt.figure(figsize=(10, 4))
     plt.bar(top_labels, top_probs)
     plt.xticks(rotation=90)
-    plt.title("Top 10 estados más probables (QAOA)")
-    plt.xlabel("Bitstring")
-    plt.ylabel("Probabilidad")
+    plt.title("Top-{} estados más probables (QAOA)".format(top_k))
     plt.tight_layout()
     plt.show()
 
-    import numpy as np
-    max_index = np.argmax(p)
-    bitstring = format(max_index, f"0{num_qubits}b")
-    print("\nSolución más probable:", bitstring)
-    print("Probabilidad:", p[max_index])
-    
-    def decode_route(bitstring, num_cities):
-        n = num_cities
-        positions = n - 1
-        route = [0]  
-
-        for p in range(1, positions + 1):
-            segment = bitstring[(p - 1) * n : p * n]
-            if "1" in segment:
-                i = segment.index("1")
-                if i != 0:   
-                    route.append(i)
-            else:
-                route.append(None)
-
-        route.append(0)  
-        return route
-
-    route = decode_route(bitstring, num_cities)
-    print("\nRuta decodificada:", route)
-    
-        ## ---------- Graficar la ruta como grafo ----------
-    import networkx as nx
-    import matplotlib.pyplot as plt
-
-    G = nx.DiGraph()
-
-    # Agregar nodos
-    nodes = list(range(num_cities))
-    G.add_nodes_from(nodes)
-
-    # Agregar todas las aristas (con pesos)
-    for i in range(num_cities):
-        for j in range(num_cities):
-            if i != j:
-                G.add_edge(i, j, weight=w[i, j])
-
-    # Extraer la ruta limpia sin "None"
-    clean_route = [node for node in route if node is not None]
-
-    # Crear lista de aristas de la ruta encontrada
-    path_edges = [(clean_route[i], clean_route[i+1]) for i in range(len(clean_route)-1)]
-
-    pos = nx.spring_layout(G, seed=42)  # para que quede bonito y estable
-
-    plt.figure(figsize=(7, 6))
-
-    # Dibujar todos los nodos y aristas en gris
-    nx.draw_networkx_nodes(G, pos, node_color='lightgray', node_size=800)
-    nx.draw_networkx_labels(G, pos, font_size=12)
-    nx.draw_networkx_edges(G, pos, edge_color='lightgray')
-
-    # Dibujar la ruta óptima en ROJO
-    nx.draw_networkx_edges(G, pos, edgelist=path_edges,
-                           edge_color='red', width=3)
-
-    plt.title("Ruta óptima según QAOA")
-    plt.axis('off')
-    plt.show()
-
-
-
-
-    labels = [format(i, f"0{num_qubits}b") for i in range(len(p))]
-
-    plt.figure(figsize=(12,6))
-    plt.bar(labels, p)
+    # Gráfica completa (opcional, se puede comentar si 2^num_qubits grande)
+    labels = [format(i, f"0{num_qubits}b") for i in range(len(probs))]
+    plt.figure(figsize=(12, 5))
+    plt.bar(labels, probs)
     plt.xticks(rotation=90)
-    plt.title("Distribución de probabilidades QAOA")
-    plt.xlabel("Bitstring")
-    plt.ylabel("Probabilidad")
+    plt.title("Distribución de probabilidades QAOA (completa)")
     plt.tight_layout()
     plt.show()
