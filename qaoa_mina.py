@@ -66,7 +66,6 @@ def compute_dijkstra_norm(w, depot=0):
         return np.zeros(n)
     return (dists - dmin) / (dmax - dmin)
 
-#Hamiltoniano de Andrés
 def build_cost_hamiltonian(w, A=10.0, B=10.0, C=1.0, alpha_dijkstra=0.0):
     n = w.shape[0]
     positions = n - 1
