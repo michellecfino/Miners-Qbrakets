@@ -167,6 +167,6 @@ for it in range(opt_steps):
 
 - **Michelle Cifuentes** (Colombia) - Estructura base del código.
 - **Unai Pérez** (España) - Implementación del optimizador ApproxTimeEvolution.
-- **Charls** - Construcción del Hamiltoniano, matriz Indonesia.
+- **Charlie Vargas Sarmiento** - Construcción del Hamiltoniano, matriz Indonesia.
 - **Andrés Burbano** - Estructura base del código.
 - **María Julia Pareja** (Perú) - Validación de datos AngloAmerican y unión de soluciones.
