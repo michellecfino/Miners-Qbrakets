@@ -25,7 +25,7 @@ pip install pennylane numpy networkx matplotlib
 
 
 ```bash
-python qaoa_mina_unified.py
+python qaoa_mina_final.py
 ```
 
 **Selección de Dataset**: El programa te pedirá elegir entre:
