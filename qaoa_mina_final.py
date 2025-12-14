@@ -7,6 +7,8 @@ Combina:
 - Datos de AngloAmerican Peru (validados)
 - Datos de paper de Indonesia (con pendientes)
 - Implementacion del optimizador de Unai
+- Implementación de mixer XY de Andres
+- Implementacion de mixer SWAP de Charlie
 - Penalizaciones calibradas
 
 """
