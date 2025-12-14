@@ -47,7 +47,33 @@ print("=" * 70)
 p_layers = 3          # Numero de capas QAOA (optimo para este problema)
 opt_steps = 200       # Pasos de optimizacion clasica
 warm_start = True     # CRITICO: Enfoque hibrido quantum-clasico
-use_xy_mixer = True   # Usar mixer XY (preserva restricciones)
+
+# ============================================================================
+# SELECCION INTERACTIVA DEL MIXER
+# ============================================================================
+
+print("\nMixers disponibles:")
+print("  1. X  (estándar, NO preserva restricciones)")
+print("  2. XY (preserva one-hot por posición)")
+print("  3. SWAP (preserva tours válidos completos)")
+print()
+
+while True:
+    mixer_choice = input("Seleccione mixer (1, 2 o 3): ").strip()
+    if mixer_choice == '1':
+        MIXER_TYPE = 'x'
+        break
+    elif mixer_choice == '2':
+        MIXER_TYPE = 'xy'
+        break
+    elif mixer_choice == '3':
+        MIXER_TYPE = 'swap'
+        break
+    else:
+        print("Opción inválida. Ingrese 1, 2 o 3.")
+
+print(f"\nMixer seleccionado: {MIXER_TYPE.upper()}")
+print("=" * 70)
 
 # ============================================================================
 # DEFINICIONES DEL CONJUNTO DE DATOS
@@ -123,7 +149,13 @@ print(f"  Estados cuanticos: 2^{num_qubits} = {2**num_qubits:,}")
 print(f"  Penalizaciones: A={A}, B={B}, C={C}")
 print(f"  Capas QAOA: {p_layers}")
 print(f"  Pasos optimizacion: {opt_steps}")
-print(f"  Mixer: {'XY (preserva restricciones)' if use_xy_mixer else 'X (estandar)'}")
+mixer_labels = {
+    'x':   'X (estándar, viola restricciones)',
+    'xy':  'XY (one-hot por posición)',
+    'swap':'SWAP (tours válidos completos)'
+}
+
+print(f"  Mixer: {mixer_labels[MIXER_TYPE]}")
 print(f"  Warm start: {warm_start}")
 print("=" * 70)
 
@@ -327,31 +359,74 @@ def build_cost_hamiltonian(w, A=10.0, B=10.0, C=1.0):
     H_cost = qml.Hamiltonian(coeffs, ops)
     return H_cost
 
-def build_xy_mixer(num_cities):
+def build_swap_mixer(num_cities):
     """
-    XY mixer that preserves one-hot encoding constraints
-    Applies XX + YY interactions within each position block
+    SWAP mixer del artículo (Hamiltoniano de intercambio de orden),
+    ADAPTADO para reemplazar build_xy_mixer directamente.
     """
     n = num_cities
     positions = n - 1
-    terms = []
+
     coeffs = []
-    
-    for p in range(1, positions + 1):
-        block = [idx(i, p, n) for i in range(n)]
-        
-        for a in range(len(block)):
-            for b in range(a + 1, len(block)):
-                q1 = block[a]
-                q2 = block[b]
-                
-                terms.append(qml.PauliX(q1) @ qml.PauliX(q2))
-                coeffs.append(1.0)
-                
-                terms.append(qml.PauliY(q1) @ qml.PauliY(q2))
-                coeffs.append(1.0)
-    
-    return qml.Hamiltonian(coeffs, terms)
+    ops = []
+
+    # S+ = (X + iY)/2 , S- = (X - iY)/2
+    choices_Splus  = [('X', 1.0), ('Y', 1.0j)]
+    choices_Sminus = [('X', 1.0), ('Y', -1.0j)]
+    pref = 1.0 / 16.0
+
+    def pauli(ch, wire):
+        if ch == 'X':
+            return qml.PauliX(wire)
+        if ch == 'Y':
+            return qml.PauliY(wire)
+        raise ValueError("Invalid Pauli")
+
+    # H_mix = sum_{p=1}^{positions-1} sum_{u,v} H_PS(p,u,v)
+    for p in range(1, positions):
+        for u in range(n):
+            for v in range(n):
+
+                q_p_u   = idx(u, p, n)
+                q_p_v   = idx(v, p, n)
+                q_pp1_u = idx(u, p+1, n)
+                q_pp1_v = idx(v, p+1, n)
+
+                pauli_terms = {}
+
+                # Expandir S+_p,u S+_{p+1,v} S-_p,v S-_{p+1,u}
+                for (c1, k1) in choices_Splus:
+                    for (c2, k2) in choices_Splus:
+                        for (c3, k3) in choices_Sminus:
+                            for (c4, k4) in choices_Sminus:
+
+                                coef = pref * (k1*k2*k3*k4)
+
+                                sparse = {
+                                    q_p_u:   c1,
+                                    q_pp1_v: c2,
+                                    q_p_v:   c3,
+                                    q_pp1_u: c4
+                                }
+
+                                key = tuple(sorted(sparse.items()))
+                                pauli_terms[key] = pauli_terms.get(key, 0.0) + coef
+
+                # Añadir término hermítico → 2 Re(...)
+                for key, a in pauli_terms.items():
+                    real_c = 2.0 * np.real(a)
+                    if abs(real_c) < 1e-12:
+                        continue
+
+                    op = None
+                    for (wire, ch) in key:
+                        single = pauli(ch, wire)
+                        op = single if op is None else (op @ single)
+
+                    coeffs.append(real_c)
+                    ops.append(op)
+
+    return qml.Hamiltonian(coeffs, ops)
 
 def build_x_mixer(num_cities):
     """Standard X mixer (allows constraint violations)"""
@@ -364,6 +439,20 @@ def build_x_mixer(num_cities):
         coeffs.append(1.0)
     
     return qml.Hamiltonian(coeffs, terms)
+
+# ============================================================================
+# MIXER FACTORY
+# ============================================================================
+
+def build_mixer(mixer_type, num_cities):
+    if mixer_type == 'x':
+        return build_x_mixer(num_cities)
+    elif mixer_type == 'xy':
+        return build_xy_mixer(num_cities)
+    elif mixer_type == 'swap':
+        return build_swap_mixer(num_cities)
+    else:
+        raise ValueError(f"Mixer desconocido: {mixer_type}")
 
 # ============================================================================
 # CLASSICAL REFERENCE SOLUTION
@@ -384,7 +473,7 @@ print(f"\nBitstring warm-start: {bitstring_warm}")
 # ============================================================================
 
 H_cost = build_cost_hamiltonian(w, A=A, B=B, C=C)
-H_mixer = build_xy_mixer(n) if use_xy_mixer else build_x_mixer(n)
+H_mixer = build_mixer(MIXER_TYPE, n)
 
 print(f"\nHAMILTONIANO:")
 print(f"H_cost terms: {len(H_cost.ops)}")
