@@ -1,11 +1,11 @@
-
+#!/usr/bin/env python3
 """
-QAOA Mining Route Optimization - Unified Version
+QAOA Mining Route Optimizatio
 Challenge 2: Miners Qbrakets Team
 
 Combina:
 - Datos de AngloAmerican Peru (validados)
-- Datos del paper de Indonesia (con pendientes)
+- Datos de paper de Indonesia (con pendientes)
 - Implementacion del optimizador de Unai
 - Penalizaciones calibradas
 
@@ -23,9 +23,7 @@ import os
 # ============================================================================
 
 # Seleccionar dataset interactivamente
-print("=" * 70)
 print(" QAOA - OPTIMIZACION DE RUTAS MINERAS")
-print("=" * 70)
 print("\nDatasets disponibles:")
 print("  1. Peru - AngloAmerican (datos validados)")
 print("  2. Indonesia - Paper academico (con pendientes)")
@@ -46,9 +44,9 @@ print(f"\nDataset seleccionado: {DATASET.upper()}")
 print("=" * 70)
 
 # Parametros QAOA
-p_layers = 3          # Numero de capas QAOA
+p_layers = 3          # Numero de capas QAOA (optimo para este problema)
 opt_steps = 200       # Pasos de optimizacion clasica
-warm_start = True     # Usar inicio en caliente desde solucion clasica
+warm_start = True     # CRITICO: Enfoque hibrido quantum-clasico
 use_xy_mixer = True   # Usar mixer XY (preserva restricciones)
 
 # ============================================================================
@@ -375,8 +373,8 @@ print("\nREFERENCIA CLÁSICA (Fuerza Bruta):")
 best_route_classic, best_cost_classic = best_classical_route(w)
 
 route_names = [LOCATION_NAMES[r] for r in best_route_classic]
-print(f"Ruta óptima: {' → '.join(route_names)}")
-print(f"Costo óptimo: {best_cost_classic:.2f} km")
+print(f"   Ruta óptima: {' → '.join(route_names)}")
+print(f"   Costo óptimo: {best_cost_classic:.2f} km")
 
 bitstring_warm = route_to_bitstring(best_route_classic, n)
 print(f"\nBitstring warm-start: {bitstring_warm}")
@@ -543,7 +541,7 @@ if valids:
     elif gap <= 25:
         print("ACEPTABLE: Gap 15-25%, considerar aumentar layers")
     else:
-        print(f"ALTO: Gap >{gap:.1f}%, ajustar A, B o layers")
+        print(f"ALTO: Gap >{gap:.1f}%")
     
     # Visualization
     if len(best_route) >= 2:
