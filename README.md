@@ -165,7 +165,7 @@ for it in range(opt_steps):
 
 **Miners Qbrakets - Challenge 2**
 
-- **Michelle Cifuentes** (Colombia) - Estructura base del código.
+- **Michelle Casallas Fino** (Colombia) - Estructura base del código.
 - **Unai Pérez** (España) - Implementación del optimizador ApproxTimeEvolution.
 - **Charlie Vargas Sarmiento** - Construcción del Hamiltoniano, matriz Indonesia.
 - **Andrés Burbano** - Estructura base del código.
